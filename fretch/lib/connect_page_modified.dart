@@ -33,6 +33,12 @@ class ConnectPageState extends State<ConnectPage> {
     });
   }
 
+  void _clearConsole() {
+    setState(() {
+      _consoleMessages.clear();
+    });
+  }
+
   void _connectToServer() async {
     final ip = _ipController.text;
     final url = _urlController.text;
@@ -115,7 +121,10 @@ class ConnectPageState extends State<ConnectPage> {
               ),
             const SizedBox(height: 16),
             Expanded(
-              child: ConsoleOutput(messages: _consoleMessages),
+              child: ConsoleOutput(
+                messages: _consoleMessages,
+                onClear: _clearConsole,
+              ),
             ),
           ],
         ),
