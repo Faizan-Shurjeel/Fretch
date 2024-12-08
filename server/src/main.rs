@@ -1,10 +1,29 @@
+mod websocket;
+
 use std::io::{BufRead, BufReader, Read};
 use std::net::{Ipv4Addr, UdpSocket};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use tiny_http::{Method, Response, Server};
 use urlencoding::decode;
+use websocket::{WebSocketHandler, broadcast_message};
 
 fn main() {
+    let clients = Arc::new(Mutex::new(Vec::new()));
+    let clients_clone = clients.clone();
+
+    // Start WebSocket server
+    thread::spawn(move || {
+        ws::listen("0.0.0.0:8001", |out| {
+            WebSocketHandler {
+                out,
+                clients: clients_clone.clone(),
+            }
+        })
+        .unwrap()
+    });
+
     // Find the local IP address
     let local_ip = get_local_ip().unwrap_or_else(|| "Unknown IP".to_string());
     //Clear the screen
@@ -37,8 +56,14 @@ fn main() {
                     let reader = BufReader::new(stdout);
                     for line in reader.lines() {
                         match line {
-                            Ok(line) => println!("{}", line),
-                            Err(e) => eprintln!("Error reading line: {}", e),
+                            Ok(line) => {
+                                println!("{}", line);
+                                broadcast_message(clients.clone(), &line);
+                            }
+                            Err(e) => {
+                                eprintln!("Error reading line: {}", e);
+                                broadcast_message(clients.clone(), &format!("Error: {}", e));
+                            }
                         }
                     }
                 }
