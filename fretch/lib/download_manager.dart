@@ -5,65 +5,82 @@ import 'package:permission_handler/permission_handler.dart';
 
 class DownloadManager {
   Future<bool> requestPermissions() async {
-    Map<Permission, PermissionStatus> statuses = await [
-      Permission.storage,
-      Permission.manageExternalStorage,
-    ].request();
+    try {
+      Map<Permission, PermissionStatus> statuses = await [
+        Permission.storage,
+        Permission.manageExternalStorage,
+      ].request();
 
-    // Check if any permission is granted
-    bool isGranted = statuses.values.any((status) => status.isGranted);
+      bool isGranted = statuses.values.any((status) => status.isGranted);
 
-    if (!isGranted) {
-      // If permission is permanently denied, open app settings
-      if (statuses.values.any((status) => status.isPermanentlyDenied)) {
-        await openAppSettings();
+      if (!isGranted) {
+        if (statuses.values.any((status) => status.isPermanentlyDenied)) {
+          print('Permissions permanently denied. Opening settings...');
+          await openAppSettings();
+          return false;
+        }
+        print('Permissions denied: $statuses');
         return false;
       }
+      return true;
+    } catch (e) {
+      print('Permission request error: $e');
+      throw Exception('Failed to request permissions: $e');
     }
-
-    return isGranted;
   }
 
   Future<String?> downloadVideo(String url, String fileName) async {
     try {
-      // Request permissions first
       bool hasPermission = await requestPermissions();
       if (!hasPermission) {
-        throw Exception('Storage permissions not granted');
+        throw Exception(
+            'Storage permissions denied. Please grant permissions in app settings.');
       }
 
-      // Try to get the download directory
       String downloadPath;
       if (Platform.isAndroid) {
         downloadPath = '/storage/emulated/0/Download';
-        // Ensure directory exists
         final dir = Directory(downloadPath);
         if (!await dir.exists()) {
-          await dir.create(recursive: true);
+          try {
+            await dir.create(recursive: true);
+          } catch (e) {
+            throw Exception('Failed to create download directory: $e');
+          }
         }
       } else {
-        final directory = await getApplicationDocumentsDirectory();
-        downloadPath = directory.path;
+        try {
+          final directory = await getApplicationDocumentsDirectory();
+          downloadPath = directory.path;
+        } catch (e) {
+          throw Exception('Failed to get application directory: $e');
+        }
       }
 
-      // Create the file
       final filePath = '$downloadPath/$fileName';
       final file = File(filePath);
 
-      print('Attempting to download to: $filePath');
+      print('Starting download to: $filePath');
 
-      // Download the file
-      final response = await http.get(Uri.parse(url));
-      if (response.statusCode == 200) {
-        await file.writeAsBytes(response.bodyBytes);
-        print('Download completed successfully to: $filePath');
-        return filePath;
-      } else {
-        throw Exception('Failed to download: HTTP ${response.statusCode}');
+      try {
+        final response = await http.get(Uri.parse(url));
+        if (response.statusCode == 200) {
+          await file.writeAsBytes(response.bodyBytes);
+          print(
+              'Download completed successfully. File size: ${response.bodyBytes.length} bytes');
+          return filePath;
+        } else {
+          throw Exception(
+              'HTTP Error ${response.statusCode}: ${response.reasonPhrase}');
+        }
+      } on http.ClientException catch (e) {
+        throw Exception('Network error during download: $e');
+      } on FileSystemException catch (e) {
+        throw Exception('File system error while saving: $e');
       }
-    } catch (e) {
-      print('Download error: $e');
-      rethrow; // Rethrow to handle in UI
+    } catch (e, stackTrace) {
+      print('Download error: $e\nStack trace: $stackTrace');
+      rethrow;
     }
   }
 }
