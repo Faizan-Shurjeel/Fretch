@@ -10,6 +10,10 @@ use tiny_http::{Method, Response, Server};
 use urlencoding::decode;
 use websocket::{broadcast_message, WebSocketHandler};
 
+fn create_response(status_code: u16, body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    Response::from_string(body).with_status_code(status_code)
+}
+
 fn main() {
     let clients = Arc::new(Mutex::new(Vec::new()));
     let clients_clone = clients.clone();
@@ -71,12 +75,11 @@ fn main() {
                 );
                 request.respond(response).unwrap();
             } else {
-                let response = Response::from_string("Invalid URL").with_status_code(400);
+                let response = create_response(400, "Invalid URL");
                 request.respond(response).unwrap();
             }
         } else {
-            let response =
-                Response::from_string("Only POST method is supported").with_status_code(405);
+            let response = create_response(405, "Only POST method is supported");
             request.respond(response).unwrap();
         }
     }
