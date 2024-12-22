@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'connect_page_modified.dart';
+import 'connect_page.dart';
 
 void main() {
   runApp(const MyApp());
