@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:permission_handler/permission_handler.dart';
 import 'firstdialog.dart';
 import 'console.dart';
 import 'websocket_client.dart';
+import 'download_manager.dart';
 
 class ConnectPage extends StatefulWidget {
   const ConnectPage({super.key});
@@ -17,14 +20,58 @@ class ConnectPageState extends State<ConnectPage> {
   String _statusMessage = '';
   final List<String> _consoleMessages = [];
   final WebSocketClient _wsClient = WebSocketClient();
+  final DownloadManager _downloadManager = DownloadManager();
+  bool _isDownloading = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       showUserGuideDialog(context);
+      _requestInitialPermissions();
     });
     _wsClient.onMessage = _addConsoleMessage;
+  }
+
+  Future<void> _requestInitialPermissions() async {
+    await _downloadManager.requestPermissions();
+  }
+
+  Future<void> _showPermissionDialog() async {
+    return showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Storage Permission Required'),
+          content: const Text(
+            'This app needs storage permission to download videos. Would you like to grant the permission now?',
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Later'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              child: const Text('Open Settings'),
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await openAppSettings();
+              },
+            ),
+            TextButton(
+              child: const Text('Grant Permission'),
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _downloadManager.requestPermissions();
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _addConsoleMessage(String message) {
@@ -39,7 +86,15 @@ class ConnectPageState extends State<ConnectPage> {
     });
   }
 
-  void _connectToServer() async {
+  Future<void> _connectToServer() async {
+    if (_ipController.text.isEmpty || _urlController.text.isEmpty) {
+      setState(() {
+        _statusMessage = 'Please enter both IP and URL';
+        _addConsoleMessage('Error: IP or URL is empty');
+      });
+      return;
+    }
+
     final ip = _ipController.text;
     final url = _urlController.text;
     final serverUrl = 'http://$ip:8000';
@@ -47,7 +102,11 @@ class ConnectPageState extends State<ConnectPage> {
     _wsClient.connect(ip);
 
     try {
-      _addConsoleMessage('Connecting to server at $serverUrl...');
+      setState(() {
+        _isDownloading = true;
+        _statusMessage = 'Getting download URL...';
+        _addConsoleMessage('Getting download URL...');
+      });
 
       final response = await http.post(
         Uri.parse(serverUrl),
@@ -55,20 +114,50 @@ class ConnectPageState extends State<ConnectPage> {
       );
 
       if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final downloadUrl = data['url'];
+        final title = data['title'];
+        final ext = data['ext'];
+
+        _addConsoleMessage('Starting download for: $title');
+
+        // Sanitize filename
+        final fileName =
+            '${title.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_')}.$ext'
+                .replaceAll(RegExp(r'\s+'), '_');
+
         setState(() {
-          _statusMessage = 'Download started';
-          _addConsoleMessage('Download started for: $url');
+          _statusMessage = 'Downloading: $fileName';
         });
+
+        try {
+          final filePath =
+              await _downloadManager.downloadVideo(downloadUrl, fileName);
+          setState(() {
+            _statusMessage = 'Download completed: $fileName';
+            _addConsoleMessage('Download completed: $filePath');
+          });
+        } catch (e) {
+          setState(() {
+            _statusMessage = 'Download failed: ${e.toString()}';
+            _addConsoleMessage('Download error: $e');
+          });
+          _showPermissionDialog();
+        }
       } else {
         setState(() {
-          _statusMessage = 'Failed to connect to the server.';
+          _statusMessage = 'Failed to get download URL';
           _addConsoleMessage('Error: Server returned ${response.statusCode}');
         });
       }
     } catch (e) {
       setState(() {
         _statusMessage = 'Error: $e';
-        _addConsoleMessage('Connection error: $e');
+        _addConsoleMessage('Error: $e');
+      });
+    } finally {
+      setState(() {
+        _isDownloading = false;
       });
     }
   }
@@ -76,6 +165,8 @@ class ConnectPageState extends State<ConnectPage> {
   @override
   void dispose() {
     _wsClient.disconnect();
+    _ipController.dispose();
+    _urlController.dispose();
     super.dispose();
   }
 
@@ -84,6 +175,13 @@ class ConnectPageState extends State<ConnectPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Fretch'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.storage),
+            onPressed: _showPermissionDialog,
+            tooltip: 'Storage Permissions',
+          ),
+        ],
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
@@ -106,16 +204,23 @@ class ConnectPageState extends State<ConnectPage> {
             ),
             const SizedBox(height: 16),
             ElevatedButton.icon(
-              onPressed: _connectToServer,
-              icon: const Icon(Icons.download),
-              label: const Text('Start Download'),
+              onPressed: _isDownloading ? null : _connectToServer,
+              icon: _isDownloading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.download),
+              label: Text(_isDownloading ? 'Downloading...' : 'Start Download'),
             ),
             const SizedBox(height: 8),
             if (_statusMessage.isNotEmpty)
               Text(
                 _statusMessage,
                 style: TextStyle(
-                    color: _statusMessage.contains('Error')
+                    color: _statusMessage.contains('Error') ||
+                            _statusMessage.contains('failed')
                         ? Colors.red
                         : Colors.green),
               ),
